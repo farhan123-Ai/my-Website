@@ -1,0 +1,394 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global safety net: default deny everything
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // --- GLOBAL HELPERS ---
+    function incoming() { return request.resource.data; }
+    function existing() { return resource.data; }
+    function isSignedIn() { return request.auth != null; }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isBootstrappedAdmin() {
+      return isSignedIn() &&
+        request.auth.token.email == 'bootstrap-admin@example.com' &&
+        request.auth.token.email_verified == true;
+    }
+
+    function isAdmin() {
+      return isBootstrappedAdmin() ||
+        (isSignedIn() && exists(/databases/$(database)/documents/admins/$(request.auth.uid)));
+    }
+
+    function isValidTimestamp(ts) {
+      return ts is timestamp && ts <= request.time;
+    }
+
+    // --- VALIDATION BLUEPRINTS ---
+
+    function isValidAdminGrant(data, uid) {
+      return data.keys().hasAll(['uid', 'email', 'grantedByUid', 'createdAt']) &&
+        data.keys().hasOnly(['uid', 'email', 'grantedByUid', 'createdAt']) &&
+        data.uid is string && data.uid == uid &&
+        data.email is string && data.email.size() >= 3 && data.email.size() <= 150 &&
+        data.grantedByUid is string && data.grantedByUid.size() >= 1 && data.grantedByUid.size() <= 128 &&
+        isValidTimestamp(data.createdAt);
+    }
+
+    function isValidAdministrator(data) {
+      return data.keys().hasAll(['email', 'passwordHash', 'passwordSalt', 'iterations', 'failedAttempts', 'lockedUntilMillis', 'sessionVersion', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['email', 'passwordHash', 'passwordSalt', 'iterations', 'failedAttempts', 'lockedUntilMillis', 'sessionVersion', 'createdAt', 'updatedAt']) &&
+        data.email is string && data.email.size() >= 3 && data.email.size() <= 150 &&
+        data.passwordHash is string && data.passwordHash.size() >= 32 && data.passwordHash.size() <= 256 &&
+        data.passwordSalt is string && data.passwordSalt.size() >= 16 && data.passwordSalt.size() <= 128 &&
+        data.iterations is int && data.iterations >= 10000 && data.iterations <= 1000000 &&
+        data.failedAttempts is int && data.failedAttempts >= 0 && data.failedAttempts <= 100 &&
+        data.lockedUntilMillis is int && data.lockedUntilMillis >= 0 &&
+        data.sessionVersion is int && data.sessionVersion >= 1 &&
+        isValidTimestamp(data.createdAt) &&
+        isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidAcademySettings(data) {
+      return data.keys().hasAll(['academyName', 'examHeading', 'instructions', 'updatedByUid', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['academyName', 'examHeading', 'instructions', 'logoBase64', 'stampBase64', 'signatureBase64', 'updatedByUid', 'createdAt', 'updatedAt']) &&
+        data.academyName is string && data.academyName.size() >= 1 && data.academyName.size() <= 120 &&
+        data.examHeading is string && data.examHeading.size() >= 1 && data.examHeading.size() <= 160 &&
+        data.instructions is string && data.instructions.size() <= 4000 &&
+        data.updatedByUid is string && data.updatedByUid.size() >= 1 && data.updatedByUid.size() <= 128 &&
+        (!('logoBase64' in data) || (data.logoBase64 is string && data.logoBase64.size() <= 400000)) &&
+        (!('stampBase64' in data) || (data.stampBase64 is string && data.stampBase64.size() <= 400000)) &&
+        (!('signatureBase64' in data) || (data.signatureBase64 is string && data.signatureBase64.size() <= 400000)) &&
+        isValidTimestamp(data.createdAt) &&
+        isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidSubject(data) {
+      return data.keys().hasAll(['name', 'codePrefix', 'assignedClasses', 'active', 'sortOrder', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['name', 'codePrefix', 'assignedClasses', 'active', 'sortOrder', 'createdAt', 'updatedAt']) &&
+        data.name is string && data.name.size() >= 1 && data.name.size() <= 80 &&
+        data.codePrefix is string && data.codePrefix.size() >= 2 && data.codePrefix.size() <= 10 &&
+        data.codePrefix.matches('^[A-Z0-9]+$') &&
+        data.assignedClasses is list && data.assignedClasses.size() <= 20 &&
+        (data.assignedClasses.size() == 0 || data.assignedClasses[0] is string) &&
+        data.active is bool &&
+        data.sortOrder is int && data.sortOrder >= 0 && data.sortOrder <= 1000 &&
+        isValidTimestamp(data.createdAt) &&
+        isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidTiming(data) {
+      return data.keys().hasAll(['slotNumber', 'label', 'startTime', 'endTime', 'durationMinutes', 'instructions', 'active', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['slotNumber', 'label', 'startTime', 'endTime', 'durationMinutes', 'instructions', 'active', 'createdAt', 'updatedAt']) &&
+        data.slotNumber is int && data.slotNumber >= 1 && data.slotNumber <= 2 &&
+        data.label is string && data.label.size() >= 1 && data.label.size() <= 80 &&
+        data.startTime is string && data.startTime.size() >= 1 && data.startTime.size() <= 30 &&
+        data.endTime is string && data.endTime.size() >= 1 && data.endTime.size() <= 30 &&
+        data.durationMinutes is int && data.durationMinutes >= 15 && data.durationMinutes <= 240 &&
+        data.instructions is string && data.instructions.size() <= 1000 &&
+        data.active is bool &&
+        isValidTimestamp(data.createdAt) &&
+        isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidCounter(data) {
+      return data.keys().hasAll(['currentSeq', 'updatedAt']) &&
+        data.keys().hasOnly(['currentSeq', 'updatedAt']) &&
+        data.currentSeq is int && data.currentSeq >= 1 && data.currentSeq <= 10000000 &&
+        isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidStudent(data) {
+      return data.keys().hasAll(['userId', 'studentName', 'fatherName', 'className', 'section', 'rollNumber', 'studentNumber', 'registrationNumber', 'lastRegistrationToken', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['userId', 'studentName', 'fatherName', 'className', 'section', 'rollNumber', 'studentNumber', 'registrationNumber', 'lastRegistrationToken', 'createdAt', 'updatedAt']) &&
+        data.userId is string && data.userId.size() >= 1 && data.userId.size() <= 128 &&
+        data.studentName is string && data.studentName.size() >= 2 && data.studentName.size() <= 100 &&
+        data.fatherName is string && data.fatherName.size() >= 2 && data.fatherName.size() <= 100 &&
+        data.className is string && data.className.size() >= 1 && data.className.size() <= 40 &&
+        data.section is string && data.section.size() >= 1 && data.section.size() <= 30 &&
+        data.rollNumber is string && data.rollNumber.size() >= 1 && data.rollNumber.size() <= 40 &&
+        data.studentNumber is string && data.studentNumber.size() >= 1 && data.studentNumber.size() <= 40 &&
+        data.registrationNumber is string && data.registrationNumber.size() >= 1 && data.registrationNumber.size() <= 40 &&
+        data.lastRegistrationToken is string && data.lastRegistrationToken.size() >= 5 && data.lastRegistrationToken.size() <= 40 &&
+        isValidTimestamp(data.createdAt) &&
+        isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidRegistration(data) {
+      return data.keys().hasAll(['userId', 'registrationToken', 'verificationId', 'studentName', 'fatherName', 'className', 'section', 'rollNumber', 'studentNumber', 'registrationNumber', 'timingId', 'timingLabel', 'subjectIds', 'subjectNames', 'paperCodes', 'subjectCount', 'totalFeePkr', 'termsAccepted', 'attendanceStatus', 'resultStatus', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['userId', 'registrationToken', 'verificationId', 'studentName', 'fatherName', 'className', 'section', 'rollNumber', 'studentNumber', 'registrationNumber', 'timingId', 'timingLabel', 'subjectIds', 'subjectNames', 'paperCodes', 'subjectCount', 'totalFeePkr', 'termsAccepted', 'attendanceStatus', 'resultStatus', 'createdAt', 'updatedAt']) &&
+        data.userId is string && data.userId.size() >= 1 && data.userId.size() <= 128 &&
+        data.registrationToken is string && data.registrationToken.size() >= 5 && data.registrationToken.size() <= 40 &&
+        data.verificationId is string && data.verificationId.size() >= 8 && data.verificationId.size() <= 64 &&
+        data.studentName is string && data.studentName.size() >= 2 && data.studentName.size() <= 100 &&
+        data.fatherName is string && data.fatherName.size() >= 2 && data.fatherName.size() <= 100 &&
+        data.className is string && data.className.size() >= 1 && data.className.size() <= 40 &&
+        data.section is string && data.section.size() >= 1 && data.section.size() <= 30 &&
+        data.rollNumber is string && data.rollNumber.size() >= 1 && data.rollNumber.size() <= 40 &&
+        data.studentNumber is string && data.studentNumber.size() >= 1 && data.studentNumber.size() <= 40 &&
+        data.registrationNumber is string && data.registrationNumber.size() >= 1 && data.registrationNumber.size() <= 40 &&
+        data.timingId is string && data.timingId.size() >= 1 && data.timingId.size() <= 64 &&
+        data.timingLabel is string && data.timingLabel.size() >= 1 && data.timingLabel.size() <= 100 &&
+        data.subjectIds is list && data.subjectIds.size() >= 1 && data.subjectIds.size() <= 20 && data.subjectIds[0] is string &&
+        data.subjectNames is list && data.subjectNames.size() == data.subjectIds.size() && data.subjectNames[0] is string &&
+        data.paperCodes is list && data.paperCodes.size() == data.subjectIds.size() && data.paperCodes[0] is string &&
+        data.subjectCount is int && data.subjectCount == data.subjectIds.size() &&
+        data.totalFeePkr is int && data.totalFeePkr == data.subjectCount * 200 &&
+        data.termsAccepted is bool && data.termsAccepted == true &&
+        data.attendanceStatus in ['PENDING', 'PRESENT', 'ABSENT', 'LATE'] &&
+        data.resultStatus in ['PENDING', 'PASS', 'FAIL', 'SUPPLEMENTARY'] &&
+        isValidTimestamp(data.createdAt) &&
+        isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidRegisteredSubject(data) {
+      return data.keys().hasAll(['userId', 'registrationId', 'registrationToken', 'subjectId', 'subjectName', 'paperCode', 'className', 'timingId', 'createdAt']) &&
+        data.keys().hasOnly(['userId', 'registrationId', 'registrationToken', 'subjectId', 'subjectName', 'paperCode', 'className', 'timingId', 'createdAt']) &&
+        data.userId is string && data.userId.size() >= 1 && data.userId.size() <= 128 &&
+        data.registrationId is string && data.registrationId.size() >= 1 && data.registrationId.size() <= 128 &&
+        data.registrationToken is string && data.registrationToken.size() >= 5 && data.registrationToken.size() <= 40 &&
+        data.subjectId is string && data.subjectId.size() >= 1 && data.subjectId.size() <= 128 &&
+        data.subjectName is string && data.subjectName.size() >= 1 && data.subjectName.size() <= 80 &&
+        data.paperCode is string && data.paperCode.size() >= 5 && data.paperCode.size() <= 40 &&
+        data.className is string && data.className.size() >= 1 && data.className.size() <= 40 &&
+        data.timingId is string && data.timingId.size() >= 1 && data.timingId.size() <= 64 &&
+        isValidTimestamp(data.createdAt);
+    }
+
+    function isValidPaperCodeRecord(data) {
+      return data.keys().hasAll(['userId', 'registrationId', 'registrationToken', 'subjectId', 'subjectName', 'paperCode', 'createdAt']) &&
+        data.keys().hasOnly(['userId', 'registrationId', 'registrationToken', 'subjectId', 'subjectName', 'paperCode', 'createdAt']) &&
+        data.userId is string && data.userId.size() >= 1 && data.userId.size() <= 128 &&
+        data.registrationId is string && data.registrationId.size() >= 1 && data.registrationId.size() <= 128 &&
+        data.registrationToken is string && data.registrationToken.size() >= 5 && data.registrationToken.size() <= 40 &&
+        data.subjectId is string && data.subjectId.size() >= 1 && data.subjectId.size() <= 128 &&
+        data.subjectName is string && data.subjectName.size() >= 1 && data.subjectName.size() <= 80 &&
+        data.paperCode is string && data.paperCode.size() >= 5 && data.paperCode.size() <= 40 &&
+        isValidTimestamp(data.createdAt);
+    }
+
+    function isValidRegistrationTokenRecord(data) {
+      return data.keys().hasAll(['userId', 'registrationId', 'registrationToken', 'createdAt']) &&
+        data.keys().hasOnly(['userId', 'registrationId', 'registrationToken', 'createdAt']) &&
+        data.userId is string && data.userId.size() >= 1 && data.userId.size() <= 128 &&
+        data.registrationId is string && data.registrationId.size() >= 1 && data.registrationId.size() <= 128 &&
+        data.registrationToken is string && data.registrationToken.size() >= 5 && data.registrationToken.size() <= 40 &&
+        isValidTimestamp(data.createdAt);
+    }
+
+    function isValidQrVerification(data) {
+      return data.keys().hasAll(['userId', 'registrationId', 'registrationToken', 'studentName', 'className', 'section', 'timingId', 'timingLabel', 'subjectNames', 'paperCodes', 'attendanceStatus', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['userId', 'registrationId', 'registrationToken', 'studentName', 'className', 'section', 'timingId', 'timingLabel', 'subjectNames', 'paperCodes', 'attendanceStatus', 'createdAt', 'updatedAt']) &&
+        data.userId is string && data.userId.size() >= 1 && data.userId.size() <= 128 &&
+        data.registrationId is string && data.registrationId.size() >= 1 && data.registrationId.size() <= 128 &&
+        data.registrationToken is string && data.registrationToken.size() >= 5 && data.registrationToken.size() <= 40 &&
+        data.studentName is string && data.studentName.size() >= 2 && data.studentName.size() <= 100 &&
+        data.className is string && data.className.size() >= 1 && data.className.size() <= 40 &&
+        data.section is string && data.section.size() >= 1 && data.section.size() <= 30 &&
+        data.timingId is string && data.timingId.size() >= 1 && data.timingId.size() <= 64 &&
+        data.timingLabel is string && data.timingLabel.size() >= 1 && data.timingLabel.size() <= 100 &&
+        data.subjectNames is list && data.subjectNames.size() >= 1 && data.subjectNames.size() <= 20 && data.subjectNames[0] is string &&
+        data.paperCodes is list && data.paperCodes.size() == data.subjectNames.size() && data.paperCodes[0] is string &&
+        data.attendanceStatus in ['PENDING', 'PRESENT', 'ABSENT', 'LATE'] &&
+        isValidTimestamp(data.createdAt) &&
+        isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidAttendanceRecord(data) {
+      return data.keys().hasAll(['registrationId', 'registrationToken', 'verificationId', 'studentName', 'className', 'section', 'timingId', 'timingLabel', 'status', 'markedByUid', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['registrationId', 'registrationToken', 'verificationId', 'studentName', 'className', 'section', 'timingId', 'timingLabel', 'status', 'markedByUid', 'createdAt', 'updatedAt']) &&
+        data.registrationId is string && data.registrationId.size() >= 1 && data.registrationId.size() <= 128 &&
+        data.registrationToken is string && data.registrationToken.size() >= 5 && data.registrationToken.size() <= 40 &&
+        data.verificationId is string && data.verificationId.size() >= 8 && data.verificationId.size() <= 64 &&
+        data.studentName is string && data.studentName.size() >= 2 && data.studentName.size() <= 100 &&
+        data.className is string && data.className.size() >= 1 && data.className.size() <= 40 &&
+        data.section is string && data.section.size() >= 1 && data.section.size() <= 30 &&
+        data.timingId is string && data.timingId.size() >= 1 && data.timingId.size() <= 64 &&
+        data.timingLabel is string && data.timingLabel.size() >= 1 && data.timingLabel.size() <= 100 &&
+        data.status in ['PRESENT', 'ABSENT', 'LATE'] &&
+        data.markedByUid is string && data.markedByUid.size() >= 1 && data.markedByUid.size() <= 128 &&
+        isValidTimestamp(data.createdAt) &&
+        isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidExamResult(data) {
+      return data.keys().hasAll(['registrationId', 'registrationToken', 'userId', 'studentName', 'fatherName', 'className', 'section', 'rollNumber', 'studentNumber', 'registrationNumber', 'subjectResults', 'totalMaxMarks', 'totalObtainedMarks', 'percentage', 'remarks', 'resultStatus', 'updatedByUid', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['registrationId', 'registrationToken', 'userId', 'studentName', 'fatherName', 'className', 'section', 'rollNumber', 'studentNumber', 'registrationNumber', 'subjectResults', 'totalMaxMarks', 'totalObtainedMarks', 'percentage', 'remarks', 'resultStatus', 'updatedByUid', 'createdAt', 'updatedAt']) &&
+        data.registrationId is string && data.registrationId.size() >= 1 && data.registrationId.size() <= 128 &&
+        data.registrationToken is string && data.registrationToken.size() >= 5 && data.registrationToken.size() <= 40 &&
+        data.userId is string && data.userId.size() >= 1 && data.userId.size() <= 128 &&
+        data.studentName is string && data.studentName.size() >= 2 && data.studentName.size() <= 100 &&
+        data.fatherName is string && data.fatherName.size() >= 2 && data.fatherName.size() <= 100 &&
+        data.className is string && data.className.size() >= 1 && data.className.size() <= 40 &&
+        data.section is string && data.section.size() >= 1 && data.section.size() <= 30 &&
+        data.rollNumber is string && data.rollNumber.size() >= 1 && data.rollNumber.size() <= 40 &&
+        data.studentNumber is string && data.studentNumber.size() >= 1 && data.studentNumber.size() <= 40 &&
+        data.registrationNumber is string && data.registrationNumber.size() >= 1 && data.registrationNumber.size() <= 40 &&
+        data.subjectResults is list && data.subjectResults.size() >= 1 && data.subjectResults.size() <= 20 &&
+        data.totalMaxMarks is number && data.totalMaxMarks >= 0 && data.totalMaxMarks <= 100000 &&
+        data.totalObtainedMarks is number && data.totalObtainedMarks >= 0 && data.totalObtainedMarks <= data.totalMaxMarks &&
+        data.percentage is number && data.percentage >= 0 && data.percentage <= 100 &&
+        data.remarks is string && data.remarks.size() <= 500 &&
+        data.resultStatus in ['PENDING', 'PASS', 'FAIL', 'SUPPLEMENTARY'] &&
+        data.updatedByUid is string && data.updatedByUid.size() >= 1 && data.updatedByUid.size() <= 128 &&
+        isValidTimestamp(data.createdAt) &&
+        isValidTimestamp(data.updatedAt);
+    }
+
+    // --- COLLECTION RULES ---
+
+    match /admins/{uid} {
+      allow get: if isSignedIn() && isValidId(uid) && (request.auth.uid == uid || isAdmin());
+      allow list: if isAdmin();
+      allow create, update: if isAdmin() && isValidId(uid) && isValidAdminGrant(incoming(), uid);
+      allow delete: if isAdmin() && isValidId(uid);
+    }
+
+    match /administrators/{adminId} {
+      allow get, list: if isAdmin();
+      allow create: if isAdmin() && isValidId(adminId) && isValidAdministrator(incoming());
+      allow update: if isAdmin() && isValidId(adminId) && isValidAdministrator(incoming()) &&
+        incoming().createdAt == existing().createdAt;
+      allow delete: if false;
+    }
+
+    match /academy_settings/{settingId} {
+      allow get, list: if isSignedIn();
+      allow create: if isAdmin() && isValidId(settingId) && isValidAcademySettings(incoming());
+      allow update: if isAdmin() && isValidId(settingId) && isValidAcademySettings(incoming()) &&
+        incoming().createdAt == existing().createdAt;
+      allow delete: if false;
+    }
+
+    match /subjects/{subjectId} {
+      allow get, list: if isSignedIn();
+      allow create: if isAdmin() && isValidId(subjectId) && isValidSubject(incoming());
+      allow update: if isAdmin() && isValidId(subjectId) && isValidSubject(incoming()) &&
+        incoming().createdAt == existing().createdAt;
+      allow delete: if isAdmin() && isValidId(subjectId);
+    }
+
+    match /examination_timings/{timingId} {
+      allow get, list: if isSignedIn();
+      allow create: if isAdmin() && isValidId(timingId) && isValidTiming(incoming());
+      allow update: if isAdmin() && isValidId(timingId) && isValidTiming(incoming()) &&
+        incoming().createdAt == existing().createdAt;
+      allow delete: if isAdmin() && isValidId(timingId);
+    }
+
+    match /counters/{counterId} {
+      allow get: if isSignedIn() && isValidId(counterId);
+      allow list: if isAdmin();
+      allow create: if isSignedIn() && isValidId(counterId) && isValidCounter(incoming()) &&
+        incoming().currentSeq >= 1 && incoming().currentSeq <= 20;
+      allow update: if isSignedIn() && isValidId(counterId) && isValidCounter(incoming()) &&
+        incoming().currentSeq > existing().currentSeq;
+      allow delete: if false;
+    }
+
+    match /students/{studentId} {
+      allow get: if isValidId(studentId) && (isAdmin() || (isSignedIn() && (resource == null || existing().userId == request.auth.uid)));
+      allow list: if isAdmin() || (isSignedIn() && resource.data.userId == request.auth.uid);
+      allow create: if isSignedIn() && isValidId(studentId) &&
+        incoming().userId == request.auth.uid &&
+        isValidStudent(incoming());
+      allow update: if isAdmin() && isValidId(studentId) &&
+        isValidStudent(incoming()) &&
+        incoming().userId == existing().userId &&
+        incoming().createdAt == existing().createdAt;
+      allow delete: if isAdmin() && isValidId(studentId);
+    }
+
+    match /registrations/{registrationId} {
+      allow get: if isValidId(registrationId) && (isAdmin() || (isSignedIn() && (resource == null || existing().userId == request.auth.uid)));
+      allow list: if isAdmin() || (isSignedIn() && resource.data.userId == request.auth.uid);
+      allow create: if isSignedIn() && isValidId(registrationId) &&
+        incoming().userId == request.auth.uid &&
+        isValidRegistration(incoming()) &&
+        incoming().attendanceStatus == 'PENDING' &&
+        incoming().resultStatus == 'PENDING';
+      allow update: if isAdmin() && isValidId(registrationId) &&
+        isValidRegistration(incoming()) &&
+        incoming().userId == existing().userId &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().registrationToken == existing().registrationToken;
+      allow delete: if isAdmin() && isValidId(registrationId);
+    }
+
+    match /registered_subjects/{itemId} {
+      allow get: if isValidId(itemId) && (isAdmin() || (isSignedIn() && (resource == null || existing().userId == request.auth.uid)));
+      allow list: if isAdmin() || (isSignedIn() && resource.data.userId == request.auth.uid);
+      allow create: if isSignedIn() && isValidId(itemId) &&
+        incoming().userId == request.auth.uid &&
+        isValidRegisteredSubject(incoming());
+      allow update: if isAdmin() && isValidId(itemId) &&
+        isValidRegisteredSubject(incoming()) &&
+        incoming().userId == existing().userId &&
+        incoming().createdAt == existing().createdAt;
+      allow delete: if isAdmin() && isValidId(itemId);
+    }
+
+    match /paper_codes/{paperCode} {
+      allow get: if isSignedIn() && isValidId(paperCode);
+      allow list: if isAdmin() || (isSignedIn() && resource.data.userId == request.auth.uid);
+      allow create: if isSignedIn() && isValidId(paperCode) &&
+        incoming().userId == request.auth.uid &&
+        incoming().paperCode == paperCode &&
+        isValidPaperCodeRecord(incoming());
+      allow update: if false;
+      allow delete: if isAdmin() && isValidId(paperCode);
+    }
+
+    match /registration_tokens/{token} {
+      allow get: if isSignedIn() && isValidId(token);
+      allow list: if isAdmin() || (isSignedIn() && resource.data.userId == request.auth.uid);
+      allow create: if isSignedIn() && isValidId(token) &&
+        incoming().userId == request.auth.uid &&
+        incoming().registrationToken == token &&
+        isValidRegistrationTokenRecord(incoming());
+      allow update: if false;
+      allow delete: if isAdmin() && isValidId(token);
+    }
+
+    match /qr_verifications/{verificationId} {
+      allow get: if isValidId(verificationId) && (isAdmin() || (isSignedIn() && (resource == null || existing().userId == request.auth.uid)));
+      allow list: if isAdmin() || (isSignedIn() && resource.data.userId == request.auth.uid);
+      allow create: if isSignedIn() && isValidId(verificationId) &&
+        incoming().userId == request.auth.uid &&
+        incoming().attendanceStatus == 'PENDING' &&
+        isValidQrVerification(incoming());
+      allow update: if isAdmin() && isValidId(verificationId) &&
+        isValidQrVerification(incoming()) &&
+        incoming().userId == existing().userId &&
+        incoming().createdAt == existing().createdAt;
+      allow delete: if isAdmin() && isValidId(verificationId);
+    }
+
+    match /attendance/{attendanceId} {
+      allow get, list: if isAdmin();
+      allow create: if isAdmin() && isValidId(attendanceId) && isValidAttendanceRecord(incoming());
+      allow update: if isAdmin() && isValidId(attendanceId) &&
+        isValidAttendanceRecord(incoming()) &&
+        incoming().createdAt == existing().createdAt;
+      allow delete: if isAdmin() && isValidId(attendanceId);
+    }
+
+    match /results/{registrationId} {
+      allow get: if isValidId(registrationId) && (isAdmin() || (isSignedIn() && (resource == null || existing().userId == request.auth.uid)));
+      allow list: if isAdmin() || (isSignedIn() && resource.data.userId == request.auth.uid);
+      allow create: if isAdmin() && isValidId(registrationId) && isValidExamResult(incoming());
+      allow update: if isAdmin() && isValidId(registrationId) &&
+        isValidExamResult(incoming()) &&
+        incoming().userId == existing().userId &&
+        incoming().createdAt == existing().createdAt;
+      allow delete: if isAdmin() && isValidId(registrationId);
+    }
+  }
+}
